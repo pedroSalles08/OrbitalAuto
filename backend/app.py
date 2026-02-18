@@ -16,14 +16,18 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
-from config import ALLOWED_ORIGINS, PORT, DEBUG
+from config import ALLOWED_ORIGINS, PORT, DEBUG, DESKTOP_MODE
 from models import (
     LoginRequest, LoginResponse, StatusResponse,
     CardapioResponse, DiaCardapio, Refeicao,
@@ -524,6 +528,59 @@ async def debug_routes(request: Request, token: str | None = None):
         "refeicao_routes": refeicao,
         "total_routes": len(all_routes),
     }
+
+
+# ── Static Files (Desktop Mode) ──────────────────────────────────
+
+if DESKTOP_MODE:
+    # Resolve the path to the static frontend build
+    _base_dir = Path(getattr(
+        __import__("sys"), "_MEIPASS", Path(__file__).resolve().parent
+    ))
+    _static_dir = _base_dir / "out"
+
+    if _static_dir.is_dir():
+        # Mount Next.js static assets (_next/static, etc.)
+        _next_dir = _static_dir / "_next"
+        if _next_dir.is_dir():
+            app.mount("/_next", StaticFiles(directory=str(_next_dir)), name="next_static")
+
+        # Serve other static files (favicon, images, etc.)
+        @app.get("/favicon.ico")
+        async def favicon():
+            fav = _static_dir / "favicon.ico"
+            if fav.exists():
+                return FileResponse(str(fav))
+            raise HTTPException(404)
+
+        # SPA catch-all: serve the correct HTML for known routes
+        @app.get("/{full_path:path}")
+        async def serve_spa(full_path: str):
+            # Try exact .html file first (Next.js static export creates /login.html, /dashboard.html)
+            html_file = _static_dir / f"{full_path}.html"
+            if html_file.is_file():
+                return FileResponse(str(html_file))
+
+            # Try directory index
+            index_file = _static_dir / full_path / "index.html"
+            if index_file.is_file():
+                return FileResponse(str(index_file))
+
+            # Try exact file (for any other static assets)
+            exact_file = _static_dir / full_path
+            if exact_file.is_file():
+                return FileResponse(str(exact_file))
+
+            # Fallback to root index.html (SPA routing)
+            root_index = _static_dir / "index.html"
+            if root_index.is_file():
+                return FileResponse(str(root_index))
+
+            raise HTTPException(404, detail="Página não encontrada")
+
+        logger.info(f"📂 Desktop mode: serving static files from {_static_dir}")
+    else:
+        logger.warning(f"⚠️  Desktop mode ON but no 'out' directory found at {_static_dir}")
 
 
 # ── Run ──────────────────────────────────────────────────────────

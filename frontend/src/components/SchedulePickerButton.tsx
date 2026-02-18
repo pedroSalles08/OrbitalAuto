@@ -22,6 +22,7 @@ import {
   Cookie,
   Moon,
   Minus,
+  School,
 } from "lucide-react";
 import type {
   DiaCardapio,
@@ -182,23 +183,23 @@ export default function SchedulePickerButton({
     [availableDays, agendamentos]
   );
 
-  const clearSelection = useCallback(() => setSelection({}), []);
-
-  // ── Open modal ────────────────────────────────────────────────
-
-  const handleOpen = useCallback(() => {
-    // Pre-select "Tudo menos Jantar" by default.
+  /** Preset "Dias de Aula": Seg/Qui = LM+AL+LT (integral), Ter/Qua/Sex = LM */
+  const selectSchoolDays = useCallback(() => {
+    const SCHOOL_SCHEDULE: Record<string, MealCode[]> = {
+      "Segunda-feira": ["LM", "AL", "LT"],
+      "Terça-feira": ["LM"],
+      "Quarta-feira": ["LM"],
+      "Quinta-feira": ["LM", "AL", "LT"],
+      "Sexta-feira": ["LM"],
+    };
     const next: SelectionMap = {};
-    const codes: MealCode[] = ["LM", "AL", "LT"];
     for (const dia of availableDays) {
+      const codes = SCHOOL_SCHEDULE[dia.dia_semana];
+      if (!codes) continue;
       const dayMeals = new Set<MealCode>();
       for (const code of codes) {
         const hasInMenu = dia.refeicoes.some((r) => r.tipo === code);
-        const alreadyDone = isAlreadyScheduled(
-          dia.data,
-          code,
-          agendamentos
-        );
+        const alreadyDone = isAlreadyScheduled(dia.data, code, agendamentos);
         if (hasInMenu && !alreadyDone) {
           dayMeals.add(code);
         }
@@ -206,8 +207,17 @@ export default function SchedulePickerButton({
       if (dayMeals.size > 0) next[dia.data] = dayMeals;
     }
     setSelection(next);
-    setOpen(true);
   }, [availableDays, agendamentos]);
+
+  const clearSelection = useCallback(() => setSelection({}), []);
+
+  // ── Open modal ────────────────────────────────────────────────
+
+  const handleOpen = useCallback(() => {
+    // Open with nothing selected — user picks a preset or checks manually.
+    setSelection({});
+    setOpen(true);
+  }, []);
 
   // ── Submit ────────────────────────────────────────────────────
 
@@ -243,47 +253,55 @@ export default function SchedulePickerButton({
       {/* Modal overlay */}
       {open && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col animate-scale-in">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col animate-scale-in">
             {/* ── Header ─────────────────────────────────────── */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+            <div className="flex items-center justify-between px-6 py-5 border-b border-gray-200 bg-gradient-to-r from-[#006633] to-green-700 rounded-t-2xl">
               <div>
-                <h3 className="text-lg font-bold text-gray-800">
+                <h3 className="text-xl font-bold text-white">
                   Selecionar Refeições
                 </h3>
-                <p className="text-sm text-gray-500 mt-0.5">
+                <p className="text-sm text-green-100 mt-1">
                   Escolha o que deseja agendar para a semana
                 </p>
               </div>
               <button
                 onClick={() => setOpen(false)}
-                className="p-2 hover:bg-gray-100 rounded-xl transition-colors cursor-pointer"
+                className="p-2 hover:bg-white/20 rounded-xl transition-colors cursor-pointer"
               >
-                <X className="w-5 h-5 text-gray-500" />
+                <X className="w-5 h-5 text-white" />
               </button>
             </div>
 
             {/* ── Quick presets ───────────────────────────────── */}
-            <div className="px-6 py-3 border-b border-gray-100 flex flex-wrap gap-2">
+            <div className="px-6 py-4 border-b border-gray-100 flex flex-wrap gap-3">
+              <button
+                onClick={selectSchoolDays}
+                className="px-4 py-2 text-sm font-semibold rounded-xl bg-amber-100 text-amber-800 
+                  hover:bg-amber-200 transition-colors cursor-pointer flex items-center gap-2 shadow-sm"
+              >
+                <School className="w-4 h-4" />
+                Dias de Aula
+              </button>
               <button
                 onClick={() => selectPreset(["LM", "AL", "LT"])}
-                className="px-3 py-1.5 text-sm font-medium rounded-lg bg-green-100 text-green-800 
-                  hover:bg-green-200 transition-colors cursor-pointer flex items-center gap-1.5"
+                className="px-4 py-2 text-sm font-semibold rounded-xl bg-green-100 text-green-800 
+                  hover:bg-green-200 transition-colors cursor-pointer flex items-center gap-2 shadow-sm"
               >
-                <Minus className="w-3.5 h-3.5" />
+                <Minus className="w-4 h-4" />
                 Tudo menos Jantar
               </button>
               <button
                 onClick={() => selectPreset(["LM", "AL", "LT", "JA"])}
-                className="px-3 py-1.5 text-sm font-medium rounded-lg bg-blue-100 text-blue-800 
-                  hover:bg-blue-200 transition-colors cursor-pointer flex items-center gap-1.5"
+                className="px-4 py-2 text-sm font-semibold rounded-xl bg-blue-100 text-blue-800 
+                  hover:bg-blue-200 transition-colors cursor-pointer flex items-center gap-2 shadow-sm"
               >
-                <Check className="w-3.5 h-3.5" />
+                <Check className="w-4 h-4" />
                 Selecionar Tudo
               </button>
               <button
                 onClick={clearSelection}
-                className="px-3 py-1.5 text-sm font-medium rounded-lg bg-gray-100 text-gray-600 
-                  hover:bg-gray-200 transition-colors cursor-pointer"
+                className="px-4 py-2 text-sm font-semibold rounded-xl bg-gray-100 text-gray-600 
+                  hover:bg-gray-200 transition-colors cursor-pointer shadow-sm"
               >
                 Limpar
               </button>
@@ -292,7 +310,7 @@ export default function SchedulePickerButton({
             {/* ── Grid ───────────────────────────────────────── */}
             <div className="flex-1 overflow-y-auto px-6 py-4">
               {/* Column headers */}
-              <div className="grid grid-cols-[1fr_repeat(4,_64px)] gap-2 mb-2 sticky top-0 bg-white pb-2">
+              <div className="grid grid-cols-[1fr_repeat(4,_minmax(0,1fr))] gap-3 mb-3 sticky top-0 bg-white pb-3 z-10">
                 <div /> {/* spacer */}
                 {MEALS.map((meal) => {
                   const Icon =
@@ -300,11 +318,11 @@ export default function SchedulePickerButton({
                   return (
                     <div
                       key={meal.code}
-                      className="flex flex-col items-center gap-0.5"
+                      className={`flex flex-col items-center gap-1 py-2 rounded-xl ${meal.bgColor}`}
                     >
-                      <Icon className={`w-4 h-4 ${meal.color}`} />
-                      <span className="text-[10px] font-medium text-gray-500 leading-tight text-center">
-                        {meal.code}
+                      <Icon className={`w-5 h-5 ${meal.color}`} />
+                      <span className={`text-xs font-semibold ${meal.color} leading-tight text-center`}>
+                        {meal.nome}
                       </span>
                     </div>
                   );
@@ -324,16 +342,16 @@ export default function SchedulePickerButton({
                   return (
                     <div
                       key={dia.data}
-                      className="grid grid-cols-[1fr_repeat(4,_64px)] gap-2 items-center py-2 border-b border-gray-50 last:border-b-0"
+                      className="grid grid-cols-[1fr_repeat(4,_minmax(0,1fr))] gap-3 items-center py-3 border-b border-gray-100 last:border-b-0"
                     >
                       {/* Day label */}
                       <div className="min-w-0">
-                        <span className="font-semibold text-gray-800 text-sm">
+                        <div className="font-bold text-gray-800 text-base">
                           {shortDay(dia.dia_semana)}
-                        </span>
-                        <span className="text-gray-400 text-xs ml-1.5">
+                        </div>
+                        <div className="text-gray-400 text-sm">
                           {formatDate(dia.data)}
-                        </span>
+                        </div>
                       </div>
 
                       {/* Meal checkboxes */}
@@ -356,8 +374,8 @@ export default function SchedulePickerButton({
                               key={meal.code}
                               className="flex items-center justify-center"
                             >
-                              <div className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center">
-                                <Minus className="w-3.5 h-3.5 text-gray-300" />
+                              <div className="w-10 h-10 rounded-xl bg-gray-50 flex items-center justify-center">
+                                <Minus className="w-4 h-4 text-gray-300" />
                               </div>
                             </div>
                           );
@@ -370,10 +388,10 @@ export default function SchedulePickerButton({
                               key={meal.code}
                               className="flex items-center justify-center"
                             >
-                              <div className="w-8 h-8 rounded-lg bg-green-100 flex items-center justify-center"
+                              <div className="w-10 h-10 rounded-xl bg-green-100 flex items-center justify-center shadow-sm"
                                 title="Já agendado"
                               >
-                                <Check className="w-4 h-4 text-green-600" />
+                                <Check className="w-5 h-5 text-green-600" />
                               </div>
                             </div>
                           );
@@ -389,17 +407,17 @@ export default function SchedulePickerButton({
                               onClick={() =>
                                 toggleMeal(dia.data, meal.code)
                               }
-                              className={`w-8 h-8 rounded-lg border-2 flex items-center justify-center
+                              className={`w-10 h-10 rounded-xl border-2 flex items-center justify-center
                                 transition-all duration-150 cursor-pointer
                                 ${
                                   isSelected
-                                    ? `${meal.bgColor} ${meal.borderColor} shadow-sm`
-                                    : "bg-white border-gray-200 hover:border-gray-300"
+                                    ? `${meal.bgColor} ${meal.borderColor} shadow-md scale-105`
+                                    : "bg-white border-gray-200 hover:border-gray-400 hover:shadow-sm"
                                 }`}
                             >
                               {isSelected && (
                                 <Check
-                                  className={`w-4 h-4 ${meal.color}`}
+                                  className={`w-5 h-5 ${meal.color}`}
                                 />
                               )}
                             </button>
@@ -437,43 +455,45 @@ export default function SchedulePickerButton({
             </div>
 
             {/* ── Footer ─────────────────────────────────────── */}
-            <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between gap-4">
+            <div className="px-6 py-5 border-t border-gray-200 flex items-center justify-between gap-4 bg-gray-50 rounded-b-2xl">
               <span className="text-sm text-gray-500">
                 {selectedCount > 0 ? (
                   <>
-                    <span className="font-semibold text-gray-800">
+                    <span className="font-bold text-[#006633] text-lg">
                       {selectedCount}
                     </span>{" "}
-                    refeição(ões) selecionada(s)
+                    refeição{selectedCount !== 1 && "ões"} selecionada{selectedCount !== 1 && "s"}
                   </>
                 ) : (
-                  "Nenhuma seleção"
+                  <span className="text-gray-400 italic">Use os atalhos acima ou marque manualmente</span>
                 )}
               </span>
 
               <div className="flex gap-3">
                 <button
                   onClick={() => setOpen(false)}
-                  className="px-5 py-2.5 border border-gray-300 rounded-xl text-gray-700 
-                    hover:bg-gray-50 transition-colors font-medium cursor-pointer text-sm"
+                  className="px-6 py-3 border border-gray-300 rounded-xl text-gray-700 
+                    hover:bg-gray-100 transition-colors font-semibold cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   onClick={handleSubmit}
                   disabled={loading || selectedCount === 0}
-                  className="px-5 py-2.5 bg-[#006633] hover:bg-green-800 disabled:bg-gray-300
-                    text-white rounded-xl transition-colors font-medium cursor-pointer
-                    disabled:cursor-not-allowed text-sm flex items-center gap-2 min-w-[160px] justify-center"
+                  className="px-6 py-3 bg-gradient-to-r from-[#006633] to-green-700 hover:from-green-800 hover:to-green-900
+                    disabled:from-gray-300 disabled:to-gray-400
+                    text-white rounded-xl transition-all font-semibold cursor-pointer
+                    disabled:cursor-not-allowed flex items-center gap-2 min-w-[180px] justify-center shadow-lg
+                    hover:shadow-xl disabled:shadow-none"
                 >
                   {loading ? (
                     <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <Loader2 className="w-5 h-5 animate-spin" />
                       Agendando...
                     </>
                   ) : (
                     <>
-                      <CalendarCheck className="w-4 h-4" />
+                      <CalendarCheck className="w-5 h-5" />
                       Agendar Selecionados
                     </>
                   )}
