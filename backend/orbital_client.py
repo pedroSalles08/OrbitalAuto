@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import logging
+import unicodedata
 from datetime import datetime, timedelta
 from typing import Any, Optional
 from urllib.parse import quote, urljoin
@@ -44,6 +45,49 @@ DIAS_SEMANA = [
     "Segunda-feira", "Terça-feira", "Quarta-feira",
     "Quinta-feira", "Sexta-feira", "Sábado", "Domingo",
 ]
+
+MEAL_TEXT_ALIASES = {
+    "LM": ["lanche da manha", "cafe da manha"],
+    "AL": ["almoco"],
+    "LT": ["lanche da tarde"],
+    "JA": ["jantar", "janta"],
+}
+
+
+def _normalize_text(value: Any) -> str:
+    """Normaliza texto para comparação robusta sem acentos."""
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _extract_meal_codes_from_agendamento(item: dict[str, Any]) -> list[str]:
+    """
+    Extrai um ou mais códigos de refeição a partir do payload do Orbital.
+
+    O Orbital pode devolver `tipo_refeicao` com texto composto, então a UI
+    precisa aceitar que um único registro represente mais de uma refeição.
+    """
+    tipo_nome = _normalize_text(item.get("tipo_refeicao", ""))
+    if not tipo_nome:
+        return []
+
+    matched_codes: list[str] = []
+    for codigo, aliases in MEAL_TEXT_ALIASES.items():
+        if any(alias in tipo_nome for alias in aliases):
+            matched_codes.append(codigo)
+
+    if not matched_codes:
+        for codigo in MEAL_CODES:
+            if re.search(rf"\b{codigo.lower()}\b", tipo_nome):
+                matched_codes.append(codigo)
+
+    return matched_codes
 
 # ── Mapeamento manual das rotas ──────────────────────────────────
 # Extraído da análise do main.js bundle do Orbital.
@@ -989,13 +1033,8 @@ class OrbitalClient:
 
         agendamentos = []
         for item in items:
-            # Mapear tipo de refeição para código
             tipo_nome = item.get("tipo_refeicao", "")
-            tipo_codigo = ""
-            for codigo, info in MEAL_CODES.items():
-                if info["nome"].lower() in tipo_nome.lower() or codigo.lower() in tipo_nome.lower():
-                    tipo_codigo = codigo
-                    break
+            tipo_codigos = _extract_meal_codes_from_agendamento(item)
 
             dia_str = item.get("dia_da_refeicao", "")
             try:
@@ -1005,13 +1044,21 @@ class OrbitalClient:
             except ValueError:
                 pass
 
-            agendamentos.append({
-                "id": item.get("id", 0),
-                "dia": dia_str,
-                "tipo_refeicao": tipo_nome,
-                "tipo_codigo": tipo_codigo,
-                "confirmado": bool(item.get("tipo_refeicao_confirmacao", False)),
-            })
+            if not tipo_codigos:
+                logger.warning(
+                    "Agendamento sem mapeamento de refeição: tipo_refeicao=%r item_keys=%s",
+                    tipo_nome,
+                    sorted(item.keys()),
+                )
+
+            for tipo_codigo in tipo_codigos:
+                agendamentos.append({
+                    "id": item.get("id", 0),
+                    "dia": dia_str,
+                    "tipo_refeicao": tipo_nome,
+                    "tipo_codigo": tipo_codigo,
+                    "confirmado": bool(item.get("tipo_refeicao_confirmacao", False)),
+                })
 
         return agendamentos
 
