@@ -22,12 +22,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 
-from config import ALLOWED_ORIGINS, PORT, DEBUG, DESKTOP_MODE
+from config import ALLOWED_ORIGINS, PORT, DEBUG, DESKTOP_MODE, ENABLE_DEBUG_ROUTES
 from models import (
     LoginRequest, LoginResponse, StatusResponse,
     CardapioResponse, DiaCardapio, Refeicao,
@@ -41,6 +41,13 @@ from orbital_client import (
     MEAL_CODES,
 )
 from session_manager import SessionManager, UserSession
+from security import (
+    ACCESS_COOKIE_NAME,
+    access_gate_enabled,
+    access_cookie_settings,
+    has_valid_access_cookie,
+    verify_access_credentials,
+)
 
 
 # ── Logging ──────────────────────────────────────────────────────
@@ -87,6 +94,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def access_gate(request: Request, call_next):
+    """
+    Barreira simples por senha para publicacao minima na web.
+
+    Usa cookie assinado para nao conflitar com o Authorization Bearer
+    usado pela sessao do proprio OrbitalAuto.
+    """
+    if not access_gate_enabled():
+        return await call_next(request)
+
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    path = request.url.path
+    if path in {"/__access/login", "/__access/logout", "/api/health"}:
+        return await call_next(request)
+
+    if has_valid_access_cookie(request.cookies.get(ACCESS_COOKIE_NAME)):
+        return await call_next(request)
+
+    if path.startswith("/api/"):
+        return PlainTextResponse("Acesso restrito", status_code=401)
+
+    return RedirectResponse(url="/__access/login", status_code=303)
 
 
 # ── Dependency: Extrair sessão do token ──────────────────────────
@@ -168,6 +202,48 @@ def _pode_desagendar(dia: str) -> tuple[bool, str]:
         return False, "Prazo expirado (desagendamento até 9h do dia da refeição)"
 
     return True, "OK"
+
+
+ACCESS_GATE_HTML = """<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OrbitalAuto - Acesso restrito</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: linear-gradient(135deg, #064e3b, #14532d); min-height: 100vh; display: grid; place-items: center; color: #111827; }
+    .card { width: min(420px, calc(100vw - 32px)); background: #ffffff; border-radius: 18px; padding: 28px; box-shadow: 0 24px 80px rgba(0, 0, 0, 0.25); }
+    h1 { margin: 0 0 8px; font-size: 1.6rem; }
+    p { margin: 0 0 20px; color: #4b5563; line-height: 1.5; }
+    label { display: block; margin: 0 0 6px; font-size: 0.95rem; font-weight: 600; }
+    input { width: 100%; box-sizing: border-box; padding: 12px 14px; border: 1px solid #d1d5db; border-radius: 12px; margin-bottom: 16px; font-size: 1rem; }
+    button { width: 100%; padding: 12px 14px; border: 0; border-radius: 12px; background: #065f46; color: #ffffff; font-size: 1rem; font-weight: 700; cursor: pointer; }
+    .error { margin-bottom: 16px; padding: 12px 14px; border-radius: 12px; background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Acesso restrito</h1>
+    <p>Informe as credenciais simples de publicacao para acessar o OrbitalAuto.</p>
+    __ERROR__
+    <form method="post" action="/__access/login">
+      <label for="username">Usuario</label>
+      <input id="username" name="username" type="text" autocomplete="username" required />
+      <label for="password">Senha</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+      <button type="submit">Entrar</button>
+    </form>
+  </main>
+</body>
+</html>
+"""
+
+
+def _render_access_gate(error: str = "") -> HTMLResponse:
+    error_html = ""
+    if error:
+        error_html = f'<div class="error">{error}</div>'
+    return HTMLResponse(ACCESS_GATE_HTML.replace("__ERROR__", error_html))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -460,7 +536,47 @@ async def health():
 
 # ── Debug ─────────────────────────────────────────────────────────
 
+@app.get("/__access/login", response_class=HTMLResponse)
+async def access_login_page(request: Request):
+    """Tela minima de autenticacao antes de expor o app na internet."""
+    if not access_gate_enabled():
+        return RedirectResponse(url="/", status_code=303)
+
+    if has_valid_access_cookie(request.cookies.get(ACCESS_COOKIE_NAME)):
+        return RedirectResponse(url="/", status_code=303)
+
+    return _render_access_gate()
+
+
+@app.post("/__access/login")
+async def access_login(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+):
+    """Valida a credencial simples e seta cookie assinado."""
+    if not access_gate_enabled():
+        return RedirectResponse(url="/", status_code=303)
+
+    if not verify_access_credentials(username, password):
+        return _render_access_gate("Credenciais invalidas")
+
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie(**access_cookie_settings(request))
+    return response
+
+
+@app.get("/__access/logout")
+async def access_logout():
+    """Remove o cookie da barreira simples."""
+    response = RedirectResponse(url="/__access/login", status_code=303)
+    response.delete_cookie(ACCESS_COOKIE_NAME, path="/")
+    return response
+
+
 def _get_debug_session(request: Request, token: str | None = None) -> UserSession:
+    if not ENABLE_DEBUG_ROUTES:
+        raise HTTPException(status_code=404, detail="Pagina nao encontrada")
     """Helper para debug endpoints — aceita token via header OU query param."""
     # Tentar query param primeiro (mais fácil de usar no browser)
     if token:

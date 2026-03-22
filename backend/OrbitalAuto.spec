@@ -48,10 +48,14 @@ a = Analysis(
         "config",
         "models",
         "orbital_client",
+        "security",
         "session_manager",
         # Pydantic
         "pydantic",
         "pydantic.deprecated.decorator",
+        # Multipart (FastAPI Form parsing for the access gate)
+        "multipart",
+        "python_multipart",
         # Email validator (pydantic dep)
         "email_validator",
         # Dotenv

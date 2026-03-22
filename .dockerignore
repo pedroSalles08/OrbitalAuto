@@ -1,0 +1,17 @@
+.git
+.gitignore
+
+backend/.env
+backend/__pycache__/
+backend/build/
+backend/dist/
+backend/out/
+
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env.local
+
+**/__pycache__/
+**/*.pyc
+**/*.pyo
