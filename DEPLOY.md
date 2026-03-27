@@ -33,7 +33,7 @@ ORBITAL_BASE_URL=https://orbital.iffarroupilha.edu.br
 Para o auto schedule hospedado multiusuario, adicione tambem:
 
 ```env
-AUTO_SCHEDULE_DRY_RUN=false
+AUTO_SCHEDULE_DRY_RUN=true
 AUTO_SCHEDULE_TIMEZONE=America/Sao_Paulo
 AUTO_SCHEDULE_LOOKAHEAD_DAYS=7
 AUTO_SCHEDULE_STORE_PATH=/var/data/orbitalauto/auto_schedule_profiles.json
@@ -48,7 +48,9 @@ AUTO_SCHEDULE_ENCRYPTION_KEY=sua-chave-fernet-estavel
 4. Defina as variaveis de ambiente acima.
 5. Anexe um `Persistent Disk`, por exemplo em `/var/data/orbitalauto`.
 6. Mantenha uma unica instancia.
-7. Use a URL padrao do Render para o primeiro teste.
+7. Faca o primeiro deploy com `AUTO_SCHEDULE_DRY_RUN=true`.
+8. Valide via UI + `smoke_auto_scheduler.py`.
+9. So depois troque para `AUTO_SCHEDULE_DRY_RUN=false` e redeploye.
 
 ## Railway
 
@@ -71,6 +73,9 @@ AUTO_SCHEDULE_ENCRYPTION_KEY=sua-chave-fernet-estavel
 - O disparo automatico roda apenas no fim de semana: slot principal no sabado
   e fallback no domingo, ambos definidos automaticamente a partir do CPF do
   usuario autenticado.
+- O horario de sabado e calculado entre `00:00` e `23:59`.
+- O horario de domingo e calculado de forma independente entre `00:00` e
+  `11:59`, para reduzir o risco de perder a segunda-feira.
 - Sem `AUTO_SCHEDULE_ENCRYPTION_KEY`, o site continua funcionando, mas o
   salvamento da automacao multiusuario falha.
 - Sem `Persistent Disk`, configuracoes, timestamps e credenciais podem ser
@@ -88,3 +93,5 @@ AUTO_SCHEDULE_ENCRYPTION_KEY=sua-chave-fernet-estavel
   schedule. A senha e armazenada de forma criptografada no servidor.
 - O deploy continua monolitico: `frontend/out` e servido pelo backend no
   mesmo dominio.
+- No Render, alteracao de env var deve ser aplicada com novo deploy; `Restart`
+  sozinho nao incorpora a mudanca recem-salva.

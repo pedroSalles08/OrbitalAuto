@@ -1,15 +1,20 @@
-# Teste do Auto Scheduler
+# Teste do Auto-Schedule
 
-Este guia cobre o fluxo local e o fluxo hospedado no Render.
+Guia atualizado para o modo hospedado multiusuario.
 
-Estado atual do POC:
+## Estado atual
 
 - a automacao roda apenas no fim de semana;
-- o sistema calcula um slot fixo de sabado por CPF e reutiliza o mesmo horario no domingo como fallback;
-- o estado operacional relevante e salvo em `backend/data/auto_schedule.json`;
-- a fonte principal de verdade para validacao hospedada e `GET /api/auto-schedule/status`.
+- cada CPF recebe dois horarios deterministas independentes:
+  - `primary` no sabado entre `00:00` e `23:59`;
+  - `fallback` no domingo entre `00:00` e `11:59`;
+- o `fallback` so roda se o sabado nao tiver sucesso;
+- configuracao, credenciais criptografadas e timestamps ficam no store definido
+  por `AUTO_SCHEDULE_STORE_PATH`;
+- a referencia principal de validacao hospedada e
+  `GET /api/auto-schedule/status`.
 
-## 1. Validacao automatizada
+## 1. Validacao local
 
 ```powershell
 cd backend
@@ -23,144 +28,56 @@ npm run build
 cd ..
 ```
 
-## 2. Subir o app local
-
-Use o helper para iniciar o backend com as credenciais do Orbital e com o modo
-tecnico desejado:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\backend\start_auto_scheduler_test.ps1 -Mode dry-run-manual
-```
-
-Modos:
-
-- `dry-run-manual`: sobe com `AUTO_SCHEDULE_DRY_RUN=true` e a automacao salva desativada.
-- `dry-run-loop`: sobe com `AUTO_SCHEDULE_DRY_RUN=true` e a automacao salva ativada.
-- `real-manual`: sobe com `AUTO_SCHEDULE_DRY_RUN=false` e a automacao salva desativada.
-- `real-loop`: sobe com `AUTO_SCHEDULE_DRY_RUN=false` e a automacao salva ativada.
-
-Parametros uteis:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\backend\start_auto_scheduler_test.ps1 `
-  -Mode dry-run-loop `
-  -Cpf 00000000000 `
-  -Password (Read-Host "Senha Orbital" -AsSecureString) `
-  -Meals AL,JA `
-  -DurationMode 30d
-```
-
-## 3. Configurar pela UI
+## 2. Conferencia na UI
 
 1. Faca login no app.
 2. No topo, ao lado do nome do usuario, clique no icone do relogio.
-3. Ajuste:
-   - ativar/desativar automacao;
-   - refeicoes automaticas;
-   - validade.
-4. Clique em `Salvar`.
+3. Abra o painel e confira:
+   - horario do sabado;
+   - horario do domingo;
+   - domingo sempre antes de `12:00`;
+   - proxima execucao;
+   - ultima execucao.
+4. Salve a senha do Orbital e uma configuracao minima.
 
-O popover mostra em modo somente leitura:
-
-- slot principal do sabado;
-- fallback de domingo;
-- proxima execucao;
-- ultima execucao.
-
-## 4. Teste local sem impacto
-
-1. Suba com `-Mode dry-run-loop`.
-2. Faca login no app.
-3. Abra o popover e confirme o horario calculado de sabado/domingo.
-4. Se estiver no fim de semana e o slot ja tiver passado, o scheduler deve
-   rodar uma vez no startup.
-5. Se estiver antes do fim de semana, confira apenas `Proxima execucao`.
-6. Em `dry-run`, `GET /api/agendamentos` nao deve mostrar itens novos.
-
-## 5. Teste de catch-up
-
-1. Ative a automacao.
-2. Reinicie o backend em um destes cenarios:
-   - sabado apos o slot calculado;
-   - domingo apos o slot calculado, sem sucesso no sabado.
-3. O scheduler deve rodar uma vez no startup.
-4. Reinicie de novo no mesmo dia.
-5. Ele nao deve repetir a mesma fase do fim de semana.
-
-## 6. Smoke test HTTP local
-
-O smoke remoto agora tambem consegue:
-
-- autenticar na barreira simples;
-- fazer login no proprio app com CPF e senha;
-- salvar uma configuracao minima via API;
-- disparar `POST /api/auto-schedule/run`;
-- validar automaticamente os criterios da Fase 1 hospedada.
-
-Uso minimo com token manual:
-
-```powershell
-python .\backend\smoke_auto_scheduler.py `
-  --base-url http://127.0.0.1:8000 `
-  --app-token SEU_TOKEN
-```
-
-Uso completo com login automatico no app:
-
-```powershell
-python .\backend\smoke_auto_scheduler.py `
-  --base-url http://127.0.0.1:8000 `
-  --app-cpf 00000000000 `
-  --app-password SUA_SENHA `
-  --apply-minimal-config `
-  --config-weekday MON `
-  --config-meal AL `
-  --run `
-  --require-credentials `
-  --require-success `
-  --validate-hosted-smoke `
-  --wait-seconds 5
-```
-
-## 7. Render: prerequisitos
-
-No primeiro deploy no Render:
+## 3. Prerequisitos no Render Starter
 
 ```env
+DESKTOP_MODE=true
+DEBUG=false
+MAX_SESSIONS=100
+SESSION_EXPIRY_HOURS=4
+ENABLE_DEBUG_ROUTES=false
+BASIC_AUTH_USER=admin
+BASIC_AUTH_PASS=troque-esta-senha
+
 AUTO_SCHEDULE_DRY_RUN=true
-AUTO_SCHEDULE_CPF=seu-cpf
-AUTO_SCHEDULE_PASSWORD=sua-senha
-AUTO_SCHEDULE_CONFIG_PATH=/opt/render/project/src/backend/data/auto_schedule.json
+AUTO_SCHEDULE_TIMEZONE=America/Sao_Paulo
+AUTO_SCHEDULE_LOOKAHEAD_DAYS=7
+AUTO_SCHEDULE_STORE_PATH=/var/data/orbitalauto/auto_schedule_profiles.json
+AUTO_SCHEDULE_ENCRYPTION_KEY=sua-chave-fernet-estavel
 ```
 
-Observacoes importantes:
+Tambem e necessario:
 
-- no `Free`, o Render pode dormir o servico apos 15 minutos sem trafego;
-- no `Free`, alteracoes no filesystem local sao perdidas em restart, redeploy ou spin-down;
-- a sessao manual do navegador nao precisa ser persistida para a automacao funcionar;
-- a configuracao da automacao e os timestamps de tentativa/sucesso precisam sobreviver a restart para evitar comportamento ambiguo.
+- plano `Starter`;
+- `Persistent Disk` anexado em `/var/data/orbitalauto`;
+- uma unica instancia;
+- cada usuario salvar a propria senha do Orbital no painel da automacao.
 
-## 8. Fase 1: Hosted smoke no Free
+## 4. Smoke hospedado em dry-run
 
-Objetivo: validar o reconciliador hospedado sem esperar o fim de semana e sem
-criar agendamentos reais.
-
-Precondicoes:
-
-- servico atual no Render;
-- `AUTO_SCHEDULE_DRY_RUN=true`;
-- `AUTO_SCHEDULE_CPF` e `AUTO_SCHEDULE_PASSWORD` configurados;
-- credenciais da barreira simples disponiveis, se ela estiver ativa.
-
-Comando recomendado:
+Objetivo: validar persistencia, API e execucao manual sem criar agendamentos reais.
 
 ```powershell
-python .\backend\smoke_auto_scheduler.py `
+cd C:\Users\Usuario\Desktop\pessoal\OrbitalAuto\backend
+
+python .\smoke_auto_scheduler.py `
   --base-url https://SEU-SERVICO.onrender.com `
-  --access-user admin `
-  --access-pass secret `
-  --app-cpf 00000000000 `
-  --app-password SUA_SENHA `
+  --access-user SEU_BASIC_AUTH_USER `
+  --access-pass SEU_BASIC_AUTH_PASS `
+  --app-cpf SEU_CPF `
+  --app-password SUA_SENHA_ORBITAL `
   --apply-minimal-config `
   --config-weekday MON `
   --config-meal AL `
@@ -171,78 +88,41 @@ python .\backend\smoke_auto_scheduler.py `
   --wait-seconds 5
 ```
 
-Criterios de aprovacao automatizados por `--validate-hosted-smoke`:
+Criterios esperados:
 
-- `has_credentials=true` no baseline;
+- `has_credentials=true`;
 - `run.success=true`;
 - `run.finished_at` preenchido;
-- `run.trigger='manual'`;
-- a execucao informou `used_existing_session=true` ou `login_performed=true`;
-- `last_successful_run_at` mudou entre o baseline e o follow-up.
+- `last_successful_run_at` atualizado;
+- `primary_run_time` visivel;
+- `fallback_run_time` visivel e `< 12:00`.
 
-## 9. Fase 2: Janela exploratoria no Free
+## 5. Teste de persistencia
 
-Objetivo: observar o comportamento automatico hospedado sabendo que o `Free`
-nao e um ambiente confiavel para provar execucao autonoma.
+1. No Render, faca `Manual Deploy -> Restart service`.
+2. Reabra o site.
+3. Confirme que:
+   - a automacao continua salva;
+   - a senha continua marcada como salva;
+   - os horarios de sabado/domingo continuam iguais para aquele CPF.
+4. Rode o smoke hospedado novamente.
 
-Mantendo o servico acordado com polling de status:
+## 6. Virada para modo real
 
-```powershell
-python .\backend\smoke_auto_scheduler.py `
-  --base-url https://SEU-SERVICO.onrender.com `
-  --access-user admin `
-  --access-pass secret `
-  --app-cpf 00000000000 `
-  --app-password SUA_SENHA `
-  --require-credentials `
-  --watch-seconds 14400 `
-  --watch-interval-seconds 300
-```
+1. Troque `AUTO_SCHEDULE_DRY_RUN=false`.
+2. Salve as env vars.
+3. Faca novo deploy.
+4. Revalide `GET /api/health`.
+5. Habilite a automacao real primeiro apenas na sua conta.
+6. So depois de um ciclo real validado libere para outros usuarios.
 
-Leitura esperada:
+## 7. Leitura esperada do comportamento automatico
 
-- antes do slot, `next_run_at` deve apontar para o slot corrente;
-- depois do slot de sabado, o `last_run.trigger` deve virar `primary` ou o
-  processo deve fazer catch-up quando acordar;
-- no domingo, `fallback` so deve aparecer se o sabado nao tiver sucesso;
-- sucesso nesta fase significa apenas "funciona com assistencia".
-
-## 10. Gate para Starter
-
-Suba para `Starter` antes de:
-
-- provar que a automacao executa sozinha no horario;
-- deixar a automacao real ligada sem supervisao;
-- depender da persistencia local de `auto_schedule.json`.
-
-Motivos:
-
-- `Free` dorme;
-- `Free` pode reiniciar a qualquer momento;
-- `Free` nao suporta persistent disk;
-- `Starter` reduz ruido de cold start e processamento.
-
-## 11. Fase 3: validacao final no Starter
-
-1. Repita primeiro a mesma rotina da Fase 1 ainda em `dry-run`.
-2. Rode a janela automatica sem keep-alive externo.
-3. Se passar, faca um unico teste real controlado.
-4. Confirme por tres sinais:
-   - `GET /api/auto-schedule/status`;
-   - dashboard normal ou `GET /api/agendamentos`;
-   - logs do Render e do login no Orbital.
-5. Ao final, desative a automacao ou deixe uma configuracao minima conhecida.
-
-Para inspecionar agendamentos no mesmo fluxo:
-
-```powershell
-python .\backend\smoke_auto_scheduler.py `
-  --base-url https://SEU-SERVICO.onrender.com `
-  --access-user admin `
-  --access-pass secret `
-  --app-cpf 00000000000 `
-  --app-password SUA_SENHA `
-  --run `
-  --require-success `
-  --fetch-agendamentos
-```
+- antes do slot de sabado, `next_run_at` aponta para o horario principal;
+- depois do slot de sabado, se nao houve sucesso, o domingo passa a ser o
+  proximo alvo;
+- no domingo, o painel mostra um horario proprio antes de `12:00`;
+- se o servico reiniciar depois do horario de domingo, mas ainda no domingo,
+  o scheduler faz catch-up uma unica vez;
+- se esse catch-up ocorrer apos `17:00`, a mensagem da ultima execucao deve
+  avisar que a segunda-feira pode ja estar fora da janela do Orbital.

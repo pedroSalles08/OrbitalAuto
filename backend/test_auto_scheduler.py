@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import json
 from datetime import datetime
 from pathlib import Path
@@ -315,6 +316,22 @@ class AutoSchedulerTests(unittest.IsolatedAsyncioTestCase):
             scheduler_a.status_payload()["primary_run_time"],
             scheduler_b.status_payload()["primary_run_time"],
         )
+        self.assertEqual(
+            scheduler_a.status_payload()["fallback_run_time"],
+            scheduler_b.status_payload()["fallback_run_time"],
+        )
+
+    def test_primary_and_fallback_slots_are_independent_and_fallback_stays_before_noon(self):
+        scheduler, _, _ = self._make_scheduler(
+            now=datetime(2026, 3, 20, 9, 0, tzinfo=TZ),
+            cpf="12345678901",
+        )
+
+        status = scheduler.status_payload()
+
+        self.assertEqual(status["primary_run_time"], "18:51")
+        self.assertEqual(status["fallback_run_time"], "06:23")
+        self.assertLess(int(status["fallback_run_time"].split(":")[0]), 12)
 
     def test_before_weekend_slot_next_run_points_to_saturday(self):
         scheduler, _, _ = self._make_scheduler(
@@ -348,7 +365,7 @@ class AutoSchedulerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_startup_runs_fallback_on_sunday_without_success(self):
         scheduler, _, store = self._make_scheduler(
-            now=datetime(2026, 3, 22, 23, 0, tzinfo=TZ),
+            now=datetime(2026, 3, 22, 16, 30, tzinfo=TZ),
             config=AutoScheduleConfig(
                 enabled=True,
                 weekly_rules=make_weekly_rules(MON=["AL"]),
@@ -369,6 +386,26 @@ class AutoSchedulerTests(unittest.IsolatedAsyncioTestCase):
             store.load().last_fallback_attempt_at.date().isoformat(),
             "2026-03-22",
         )
+
+    async def test_late_sunday_fallback_appends_deadline_warning(self):
+        scheduler, _, _ = self._make_scheduler(
+            now=datetime(2026, 3, 22, 18, 0, tzinfo=TZ),
+            config=AutoScheduleConfig(
+                enabled=True,
+                weekly_rules=make_weekly_rules(MON=["AL"]),
+                duration_mode="30d",
+                active_until=datetime(2026, 4, 21, 9, 0, tzinfo=TZ).date(),
+                last_primary_attempt_at=datetime(2026, 3, 21, 12, 0, tzinfo=TZ),
+            ),
+        )
+
+        await scheduler.start()
+        await asyncio.sleep(0.05)
+        await scheduler.stop()
+
+        status = scheduler.status_payload()
+        self.assertIn("apos 17h", status["last_run"]["message"])
+        self.assertEqual(status["last_run"]["trigger"], "fallback")
 
     def test_success_on_saturday_suppresses_sunday_fallback(self):
         scheduler, _, _ = self._make_scheduler(
@@ -630,6 +667,50 @@ class MultiUserAutoSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(second_profile)
         self.assertIsNone(second_profile.last_successful_run_at)
         self.assertEqual(second_profile.weekly_rules["THU"], ("JA",))
+
+    def test_status_payload_exposes_independent_weekend_slots(self):
+        scheduler, _, _ = self._make_scheduler(
+            now=datetime(2026, 3, 21, 9, 0, tzinfo=TZ),
+        )
+        scheduler.save_config(
+            "12345678901",
+            enabled=True,
+            weekly_rules=make_weekly_rules(MON=["AL"]),
+            duration_mode="30d",
+            orbital_password="secret-123",
+        )
+
+        status = scheduler.status_payload("12345678901")
+
+        self.assertEqual(status["primary_run_time"], "18:51")
+        self.assertEqual(status["fallback_run_time"], "06:23")
+        self.assertLess(int(status["fallback_run_time"].split(":")[0]), 12)
+
+    async def test_multi_user_startup_runs_fallback_on_sunday_afternoon(self):
+        scheduler, _, _ = self._make_scheduler(
+            now=datetime(2026, 3, 22, 16, 30, tzinfo=TZ),
+        )
+        scheduler.save_config(
+            "12345678901",
+            enabled=True,
+            weekly_rules=make_weekly_rules(MON=["AL"]),
+            duration_mode="30d",
+            orbital_password="secret-123",
+        )
+        profile = scheduler._profile_for("12345678901")
+        scheduler._save_profile(
+            replace(
+                profile,
+                last_primary_attempt_at=datetime(2026, 3, 21, 12, 0, tzinfo=TZ),
+            ).normalized()
+        )
+
+        await scheduler.start()
+        await asyncio.sleep(0.05)
+        await scheduler.stop()
+
+        status = scheduler.status_payload("12345678901")
+        self.assertEqual(status["last_run"]["trigger"], "fallback")
 
 
 if __name__ == "__main__":

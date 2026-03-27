@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
-from hashlib import sha256
 import logging
 
 from auto_schedule_crypto import AutoScheduleCredentialCipher
@@ -27,9 +26,9 @@ from auto_scheduler import (
     FALLBACK_WEEKDAY,
     PRIMARY_DAY,
     PRIMARY_WEEKDAY,
-    SLOT_HASH_SALT,
-    SLOT_WINDOW_MINUTES,
-    SLOT_WINDOW_START,
+    late_sunday_fallback_warning,
+    normalize_cpf_digits,
+    slot_time_for_phase,
 )
 from orbital_client import OrbitalClient, OrbitalError, OrbitalLoginError, OrbitalSessionExpired
 from session_manager import SessionManager
@@ -284,6 +283,9 @@ class MultiUserAutoScheduler:
             dry_run=self._settings.dry_run,
             started_at=now,
         )
+        fallback_warning = late_sunday_fallback_warning(trigger, now)
+        if fallback_warning:
+            self._logger.warning("%s CPF %s", fallback_warning, self._mask_cpf(cpf))
 
         settings_error = self._settings.validation_error()
         if settings_error:
@@ -338,12 +340,21 @@ class MultiUserAutoScheduler:
             result = self._populate_counts(result, plan)
 
             if not plan.candidates:
-                return result.finish(True, "No pending meals to schedule.")
+                return result.finish(
+                    True,
+                    self._append_warning(
+                        "No pending meals to schedule.",
+                        fallback_warning,
+                    ),
+                )
 
             if self._settings.dry_run:
                 return result.finish(
                     True,
-                    f"Dry run completed with {result.candidates_count} candidate(s).",
+                    self._append_warning(
+                        f"Dry run completed with {result.candidates_count} candidate(s).",
+                        fallback_warning,
+                    ),
                 )
 
             current_client = client
@@ -377,15 +388,21 @@ class MultiUserAutoScheduler:
             if result.errors:
                 return result.finish(
                     False,
-                    (
-                        f"Run completed with {result.scheduled_count} scheduled "
-                        f"and {len(result.errors)} error(s)."
+                    self._append_warning(
+                        (
+                            f"Run completed with {result.scheduled_count} scheduled "
+                            f"and {len(result.errors)} error(s)."
+                        ),
+                        fallback_warning,
                     ),
                 )
 
             return result.finish(
                 True,
-                f"Run completed with {result.scheduled_count} scheduled meal(s).",
+                self._append_warning(
+                    f"Run completed with {result.scheduled_count} scheduled meal(s).",
+                    fallback_warning,
+                ),
             )
         except (AutoScheduleConfigError, OrbitalLoginError, OrbitalError) as exc:
             result.errors.append(str(exc))
@@ -499,12 +516,13 @@ class MultiUserAutoScheduler:
         self._save_profile(updated.normalized())
 
     def _slot_payload(self, cpf: str) -> dict[str, object]:
-        primary_run_time = self._slot_time_string(cpf)
+        primary_run_time = self._slot_time_string(cpf, "primary")
+        fallback_run_time = self._slot_time_string(cpf, "fallback")
         return {
             "primary_day": PRIMARY_DAY,
             "primary_run_time": primary_run_time,
             "fallback_day": FALLBACK_DAY,
-            "fallback_run_time": primary_run_time,
+            "fallback_run_time": fallback_run_time,
         }
 
     def _due_phase(
@@ -519,8 +537,9 @@ class MultiUserAutoScheduler:
         if not profile.has_credentials:
             return None
 
-        slot_time = self._slot_time(profile.cpf)
-        if slot_time is None:
+        primary_slot_time = self._slot_time(profile.cpf, "primary")
+        fallback_slot_time = self._slot_time(profile.cpf, "fallback")
+        if primary_slot_time is None or fallback_slot_time is None:
             return None
 
         weekend_start = self._weekend_start(now)
@@ -529,7 +548,11 @@ class MultiUserAutoScheduler:
                 return None
             if self._has_primary_attempt_in_weekend(profile, weekend_start):
                 return None
-            if now >= self._primary_datetime(weekend_start, slot_time, now.tzinfo):
+            if now >= self._primary_datetime(
+                weekend_start,
+                primary_slot_time,
+                now.tzinfo,
+            ):
                 return "primary"
             return None
 
@@ -538,7 +561,11 @@ class MultiUserAutoScheduler:
                 return None
             if self._has_fallback_attempt_in_weekend(profile, weekend_start):
                 return None
-            if now >= self._fallback_datetime(weekend_start, slot_time, now.tzinfo):
+            if now >= self._fallback_datetime(
+                weekend_start,
+                fallback_slot_time,
+                now.tzinfo,
+            ):
                 return "fallback"
 
         return None
@@ -555,34 +582,63 @@ class MultiUserAutoScheduler:
         if not profile.has_credentials:
             return None
 
-        slot_time = self._slot_time(profile.cpf)
-        if slot_time is None:
+        primary_slot_time = self._slot_time(profile.cpf, "primary")
+        fallback_slot_time = self._slot_time(profile.cpf, "fallback")
+        if primary_slot_time is None or fallback_slot_time is None:
             return None
 
         weekend_start = self._weekend_start(now)
         next_weekend_start = weekend_start + timedelta(days=7)
 
         if now.weekday() <= 4:
-            return self._primary_datetime(next_weekend_start, slot_time, now.tzinfo)
+            return self._primary_datetime(
+                next_weekend_start,
+                primary_slot_time,
+                now.tzinfo,
+            )
 
         if now.weekday() == PRIMARY_WEEKDAY:
             if self._has_success_in_weekend(profile, weekend_start):
-                return self._primary_datetime(next_weekend_start, slot_time, now.tzinfo)
+                return self._primary_datetime(
+                    next_weekend_start,
+                    primary_slot_time,
+                    now.tzinfo,
+                )
 
-            primary_at = self._primary_datetime(weekend_start, slot_time, now.tzinfo)
+            primary_at = self._primary_datetime(
+                weekend_start,
+                primary_slot_time,
+                now.tzinfo,
+            )
             if not self._has_primary_attempt_in_weekend(profile, weekend_start):
                 return now if now >= primary_at else primary_at
 
-            return self._fallback_datetime(weekend_start, slot_time, now.tzinfo)
+            return self._fallback_datetime(
+                weekend_start,
+                fallback_slot_time,
+                now.tzinfo,
+            )
 
         if self._has_success_in_weekend(profile, weekend_start):
-            return self._primary_datetime(next_weekend_start, slot_time, now.tzinfo)
+            return self._primary_datetime(
+                next_weekend_start,
+                primary_slot_time,
+                now.tzinfo,
+            )
 
-        fallback_at = self._fallback_datetime(weekend_start, slot_time, now.tzinfo)
+        fallback_at = self._fallback_datetime(
+            weekend_start,
+            fallback_slot_time,
+            now.tzinfo,
+        )
         if not self._has_fallback_attempt_in_weekend(profile, weekend_start):
             return now if now >= fallback_at else fallback_at
 
-        return self._primary_datetime(next_weekend_start, slot_time, now.tzinfo)
+        return self._primary_datetime(
+            next_weekend_start,
+            primary_slot_time,
+            now.tzinfo,
+        )
 
     def _automatic_phase_for_trigger(self, trigger: str) -> AutoSchedulePhase | None:
         if trigger == "primary":
@@ -591,21 +647,14 @@ class MultiUserAutoScheduler:
             return "fallback"
         return None
 
-    def _slot_time_string(self, cpf: str) -> str | None:
-        slot = self._slot_time(cpf)
+    def _slot_time_string(self, cpf: str, phase: AutoSchedulePhase) -> str | None:
+        slot = self._slot_time(cpf, phase)
         if slot is None:
             return None
         return f"{slot.hour:02d}:{slot.minute:02d}"
 
-    def _slot_time(self, cpf: str) -> time | None:
-        digits = self._normalize_cpf(cpf)
-        if not digits:
-            return None
-
-        digest = sha256(f"{SLOT_HASH_SALT}:{digits}".encode("utf-8")).digest()
-        offset = int.from_bytes(digest[:8], byteorder="big") % SLOT_WINDOW_MINUTES
-        total_minutes = SLOT_WINDOW_START.hour * 60 + SLOT_WINDOW_START.minute + offset
-        return time(hour=total_minutes // 60, minute=total_minutes % 60)
+    def _slot_time(self, cpf: str, phase: AutoSchedulePhase) -> time | None:
+        return slot_time_for_phase(cpf, phase)
 
     def _weekend_start(self, now: datetime) -> date:
         days_since_saturday = (now.weekday() - PRIMARY_WEEKDAY) % 7
@@ -708,10 +757,15 @@ class MultiUserAutoScheduler:
         return self._now_provider(self._settings.timezone_name)
 
     def _normalize_cpf(self, cpf: str) -> str:
-        return "".join(ch for ch in str(cpf or "") if ch.isdigit())
+        return normalize_cpf_digits(cpf)
 
     def _mask_cpf(self, cpf: str) -> str:
         digits = self._normalize_cpf(cpf)
         if len(digits) < 3:
             return "***"
         return f"{digits[:3]}***"
+
+    def _append_warning(self, message: str, warning: str | None) -> str:
+        if not warning:
+            return message
+        return f"{message} Aviso: {warning}"

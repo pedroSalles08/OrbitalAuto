@@ -313,7 +313,7 @@ export default function AutoScheduleControl() {
               <div>
                 <h3 className="text-sm font-semibold text-slate-900">Credencial da automacao</h3>
                 <p className="text-sm text-slate-500">
-                  Essa senha fica vinculada ao seu usuario e permite que o agendamento rode sozinho no servidor.
+                  Essa senha fica vinculada ao seu usuario e permite que o agendamento rode sozinho no servidor, inclusive no fallback de domingo.
                 </p>
               </div>
 
