@@ -15,6 +15,10 @@ import type {
   AgendarSemanaResponse,
   MessageResponse,
   MealCode,
+  AutoScheduleConfigRequest,
+  AutoScheduleConfigResponse,
+  AutoScheduleStatusResponse,
+  AutoScheduleRunResponse,
 } from "@/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
@@ -193,5 +197,28 @@ export async function desagendar(
   const params = dia ? `?dia=${dia}` : "";
   return apiFetch<MessageResponse>(`/api/agendar/${agendamentoId}${params}`, {
     method: "DELETE",
+  });
+}
+
+export async function getAutoScheduleStatus(): Promise<AutoScheduleStatusResponse> {
+  return apiFetch<AutoScheduleStatusResponse>("/api/auto-schedule/status");
+}
+
+export async function getAutoScheduleConfig(): Promise<AutoScheduleConfigResponse> {
+  return apiFetch<AutoScheduleConfigResponse>("/api/auto-schedule/config");
+}
+
+export async function saveAutoScheduleConfig(
+  data: AutoScheduleConfigRequest
+): Promise<AutoScheduleConfigResponse> {
+  return apiFetch<AutoScheduleConfigResponse>("/api/auto-schedule/config", {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function runAutoScheduleNow(): Promise<AutoScheduleRunResponse> {
+  return apiFetch<AutoScheduleRunResponse>("/api/auto-schedule/run", {
+    method: "POST",
   });
 }

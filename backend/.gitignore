@@ -3,3 +3,5 @@ __pycache__/
 .env
 venv/
 downloads/
+data/auto_schedule.json
+.tmp_test_data/

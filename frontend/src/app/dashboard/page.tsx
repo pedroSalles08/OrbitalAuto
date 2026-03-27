@@ -1,21 +1,17 @@
-// ── OrbitalAuto · Dashboard Page ────────────────────────────────
-
 "use client";
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
 import Header from "@/components/Header";
 import WeeklyMenu from "@/components/WeeklyMenu";
 import { ToastProvider } from "@/components/Toast";
-import { getToken, getUserName, logout, checkAuth } from "@/lib/api";
-import { Loader2 } from "lucide-react";
+import { checkAuth, getToken, getUserName, logout } from "@/lib/api";
 
 export default function DashboardPage() {
   const router = useRouter();
   const [nome, setNome] = useState("");
   const [checking, setChecking] = useState(true);
-
-  // ── Auth check ────────────────────────────────────────────────
 
   useEffect(() => {
     async function verify() {
@@ -36,10 +32,9 @@ export default function DashboardPage() {
           router.replace("/login");
           return;
         }
-        setNome(status.nome || getUserName() || "Usuário");
+        setNome(status.nome || getUserName() || "Usuario");
       } catch (err) {
         console.error("[Dashboard] checkAuth error:", err);
-        // Se falhar, tenta usar nome do localStorage
         const savedName = getUserName();
         if (savedName) {
           setNome(savedName);
@@ -54,30 +49,23 @@ export default function DashboardPage() {
     }
 
     verify();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ── Logout ────────────────────────────────────────────────────
+  }, [router]);
 
   async function handleLogout() {
     await logout();
     router.push("/login");
   }
 
-  // ── Loading ───────────────────────────────────────────────────
-
   if (checking) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="w-8 h-8 text-green-600 animate-spin" />
-          <p className="text-gray-500 text-sm">Verificando sessão...</p>
+          <p className="text-gray-500 text-sm">Verificando sessao...</p>
         </div>
       </div>
     );
   }
-
-  // ── Render ────────────────────────────────────────────────────
 
   return (
     <ToastProvider>
@@ -85,23 +73,20 @@ export default function DashboardPage() {
         <Header nome={nome} onLogout={handleLogout} />
 
         <main className="max-w-6xl mx-auto px-4 py-6">
-          {/* Title */}
           <div className="mb-6">
             <h2 className="text-2xl font-bold text-gray-800">
-              Cardápio da Semana
+              Cardapio da Semana
             </h2>
             <p className="text-gray-500 text-sm mt-1">
-              Visualize o cardápio e agende suas refeições com um clique
+              Visualize o cardapio e agende suas refeicoes com um clique
             </p>
           </div>
 
-          {/* Content */}
           <WeeklyMenu />
         </main>
 
-        {/* Footer */}
         <footer className="text-center py-6 text-xs text-gray-400">
-          OrbitalAuto • Agendamento automático de refeições • IFFarroupilha
+          OrbitalAuto • Agendamento automatico de refeicoes • IFFarroupilha
         </footer>
       </div>
     </ToastProvider>

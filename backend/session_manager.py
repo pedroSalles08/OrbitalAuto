@@ -140,6 +140,13 @@ class SessionManager:
         session.touch()
         return session
 
+    def get_session_by_cpf(self, cpf: str) -> Optional[UserSession]:
+        """Busca uma sessao ativa pelo CPF."""
+        existing = self._find_by_cpf(cpf)
+        if not existing:
+            return None
+        return self.get_session(existing.token)
+
     def destroy_session(self, token: str) -> None:
         """Remove uma sessão e faz logout no Orbital."""
         session = self._sessions.pop(token, None)

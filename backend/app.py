@@ -16,10 +16,9 @@ Endpoints:
 from __future__ import annotations
 
 import logging
-import os
 import re
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Depends, Form
@@ -27,7 +26,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 
-from config import ALLOWED_ORIGINS, PORT, DEBUG, DESKTOP_MODE, ENABLE_DEBUG_ROUTES
+from auto_schedule_domain import can_schedule, can_unschedule, local_now
+from auto_schedule_crypto import AutoScheduleCredentialCipher
+from auto_schedule_store import AutoScheduleProfileStore
+from auto_scheduler import AutoScheduleConfigError
+from config import (
+    ALLOWED_ORIGINS,
+    AUTO_SCHEDULE_DRY_RUN,
+    AUTO_SCHEDULE_ENCRYPTION_KEY,
+    AUTO_SCHEDULE_LOOKAHEAD_DAYS,
+    AUTO_SCHEDULE_STORE_PATH,
+    AUTO_SCHEDULE_TIMEZONE,
+    PORT,
+    DEBUG,
+    DESKTOP_MODE,
+    ENABLE_DEBUG_ROUTES,
+)
 from models import (
     LoginRequest, LoginResponse, StatusResponse,
     CardapioResponse, DiaCardapio, Refeicao,
@@ -35,6 +49,10 @@ from models import (
     AgendarRequest, AgendarSemanaRequest, AgendarSemanaResponse,
     AgendarSelecionadosRequest,
     MessageResponse,
+    AutoScheduleConfigRequest,
+    AutoScheduleConfigResponse,
+    AutoScheduleRunResponse,
+    AutoScheduleStatusResponse,
 )
 from orbital_client import (
     OrbitalClient, OrbitalError, OrbitalLoginError, OrbitalSessionExpired,
@@ -47,6 +65,10 @@ from security import (
     access_cookie_settings,
     has_valid_access_cookie,
     verify_access_credentials,
+)
+from multi_user_auto_scheduler import (
+    MultiUserAutoScheduleSettings,
+    MultiUserAutoScheduler,
 )
 
 
@@ -63,6 +85,26 @@ logger = logging.getLogger("app")
 # ── Session Manager (global) ─────────────────────────────────────
 
 session_manager = SessionManager()
+auto_schedule_cipher = None
+if AUTO_SCHEDULE_ENCRYPTION_KEY:
+    try:
+        auto_schedule_cipher = AutoScheduleCredentialCipher(
+            AUTO_SCHEDULE_ENCRYPTION_KEY
+        )
+    except AutoScheduleConfigError as exc:
+        logger.error("Auto schedule encryption is unavailable: %s", exc)
+
+auto_schedule_store = AutoScheduleProfileStore(AUTO_SCHEDULE_STORE_PATH)
+auto_scheduler = MultiUserAutoScheduler(
+    session_manager=session_manager,
+    settings=MultiUserAutoScheduleSettings(
+        dry_run=AUTO_SCHEDULE_DRY_RUN,
+        timezone_name=AUTO_SCHEDULE_TIMEZONE,
+        lookahead_days=AUTO_SCHEDULE_LOOKAHEAD_DAYS,
+    ),
+    profile_store=auto_schedule_store,
+    credential_cipher=auto_schedule_cipher,
+)
 
 
 # ── Lifespan ─────────────────────────────────────────────────────
@@ -71,8 +113,10 @@ session_manager = SessionManager()
 async def lifespan(app: FastAPI):
     """Startup e shutdown do servidor."""
     await session_manager.start()
+    await auto_scheduler.start()
     logger.info("🚀 OrbitalAuto backend iniciado")
     yield
+    await auto_scheduler.stop()
     await session_manager.stop()
     logger.info("OrbitalAuto backend encerrado")
 
@@ -147,61 +191,18 @@ async def get_current_session(request: Request) -> UserSession:
 # ── Helpers ──────────────────────────────────────────────────────
 
 def _pode_agendar(dia: str) -> tuple[bool, str]:
-    """
-    Verifica se o agendamento é permitido para a data.
-    Regra: até 17h do dia anterior à refeição.
-    
-    Returns:
-        (pode, motivo)
-    """
-    try:
-        data_refeicao = datetime.strptime(dia, "%Y-%m-%d").date()
-    except ValueError:
-        return False, "Data inválida"
-
-    agora = datetime.now()
-    hoje = agora.date()
-
-    # Data já passou
-    if data_refeicao < hoje:
-        return False, "Data já passou"
-
-    # Se é para hoje, verificar se já passou das 17h de ontem
-    # (i.e., nunca se pode agendar para o mesmo dia no dia)
-    if data_refeicao == hoje:
-        return False, "Não é possível agendar para hoje (prazo: até 17h de ontem)"
-
-    # Se é para amanhã, verificar se passou das 17h de hoje
-    if data_refeicao == hoje + timedelta(days=1):
-        if agora.hour >= 17:
-            return False, "Prazo expirado (agendamento até 17h do dia anterior)"
-
-    return True, "OK"
+    return can_schedule(dia, local_now(AUTO_SCHEDULE_TIMEZONE))
 
 
 def _pode_desagendar(dia: str) -> tuple[bool, str]:
-    """
-    Verifica se o desagendamento é permitido.
-    Regra: até 9h do dia da refeição.
-    
-    Returns:
-        (pode, motivo)
-    """
-    try:
-        data_refeicao = datetime.strptime(dia, "%Y-%m-%d").date()
-    except ValueError:
-        return False, "Data inválida"
+    return can_unschedule(dia, local_now(AUTO_SCHEDULE_TIMEZONE))
 
-    agora = datetime.now()
-    hoje = agora.date()
 
-    if data_refeicao < hoje:
-        return False, "Data já passou"
-
-    if data_refeicao == hoje and agora.hour >= 9:
-        return False, "Prazo expirado (desagendamento até 9h do dia da refeição)"
-
-    return True, "OK"
+async def get_auto_schedule_session(
+    session: UserSession = Depends(get_current_session),
+) -> UserSession:
+    """Exige sessao autenticada do app para operar o auto schedule."""
+    return session
 
 
 ACCESS_GATE_HTML = """<!DOCTYPE html>
@@ -530,11 +531,69 @@ async def health():
     return {
         "status": "ok",
         "sessoes_ativas": session_manager.active_count,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": local_now(AUTO_SCHEDULE_TIMEZONE).isoformat(),
     }
 
 
 # ── Debug ─────────────────────────────────────────────────────────
+
+@app.get(
+    "/api/auto-schedule/config",
+    response_model=AutoScheduleConfigResponse,
+)
+async def auto_schedule_config(
+    session: UserSession = Depends(get_auto_schedule_session),
+):
+    """Retorna a configuracao persistida do auto scheduler."""
+    return AutoScheduleConfigResponse(**auto_scheduler.config_payload(session.cpf))
+
+
+@app.put(
+    "/api/auto-schedule/config",
+    response_model=AutoScheduleConfigResponse,
+)
+async def auto_schedule_save_config(
+    payload: AutoScheduleConfigRequest,
+    session: UserSession = Depends(get_auto_schedule_session),
+):
+    """Valida e salva a configuracao do auto scheduler."""
+    try:
+        response = auto_scheduler.save_config(
+            session.cpf,
+            enabled=payload.enabled,
+            weekly_rules=payload.weekly_rules,
+            duration_mode=payload.duration_mode,
+            orbital_password=payload.orbital_password,
+            clear_saved_credentials=payload.clear_saved_credentials,
+        )
+    except AutoScheduleConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return AutoScheduleConfigResponse(**response)
+
+
+@app.get(
+    "/api/auto-schedule/status",
+    response_model=AutoScheduleStatusResponse,
+)
+async def auto_schedule_status(
+    session: UserSession = Depends(get_auto_schedule_session),
+):
+    """Retorna o estado atual do reconciliador automatico."""
+    return AutoScheduleStatusResponse(**auto_scheduler.status_payload(session.cpf))
+
+
+@app.post(
+    "/api/auto-schedule/run",
+    response_model=AutoScheduleRunResponse,
+)
+async def auto_schedule_run(
+    session: UserSession = Depends(get_auto_schedule_session),
+):
+    """Dispara uma execucao manual do reconciliador automatico."""
+    payload = await auto_scheduler.run_now(session.cpf, trigger="manual", force=True)
+    return AutoScheduleRunResponse(**payload)
+
 
 @app.get("/__access/login", response_class=HTMLResponse)
 async def access_login_page(request: Request):

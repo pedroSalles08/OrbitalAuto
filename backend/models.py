@@ -4,8 +4,14 @@ Pydantic models para request/response da API.
 """
 
 from __future__ import annotations
+from datetime import date, datetime
+
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Literal, Optional
+
+
+WeekdayCode = Literal["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+WeeklyRules = dict[WeekdayCode, list[str]]
 
 
 # ── Auth ──────────────────────────────────────────────────────────
@@ -95,3 +101,64 @@ class AgendarSemanaResponse(BaseModel):
 class MessageResponse(BaseModel):
     message: str
     success: bool = True
+
+
+class AutoScheduleRunResponse(BaseModel):
+    trigger: str
+    enabled: bool
+    dry_run: bool
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    success: Optional[bool] = None
+    message: str = ""
+    used_existing_session: bool = False
+    login_performed: bool = False
+    candidates_count: int = 0
+    scheduled_count: int = 0
+    already_scheduled_count: int = 0
+    skipped_count: int = 0
+    errors: list[str] = Field(default_factory=list)
+    last_error: Optional[str] = None
+
+
+class AutoScheduleConfigRequest(BaseModel):
+    enabled: bool = False
+    weekly_rules: WeeklyRules = Field(default_factory=dict)
+    duration_mode: str = "30d"
+    orbital_password: Optional[str] = None
+    clear_saved_credentials: bool = False
+
+
+class AutoScheduleConfigResponse(BaseModel):
+    enabled: bool
+    weekly_rules: WeeklyRules = Field(default_factory=dict)
+    duration_mode: str
+    active_until: Optional[date] = None
+    updated_at: Optional[datetime] = None
+    last_successful_run_at: Optional[datetime] = None
+    has_credentials: bool = False
+    credentials_updated_at: Optional[datetime] = None
+    primary_day: str
+    primary_run_time: Optional[str] = None
+    fallback_day: str
+    fallback_run_time: Optional[str] = None
+
+
+class AutoScheduleStatusResponse(BaseModel):
+    enabled: bool
+    dry_run: bool
+    running: bool
+    timezone: str
+    weekly_rules: WeeklyRules = Field(default_factory=dict)
+    duration_mode: str
+    active_until: Optional[date] = None
+    updated_at: Optional[datetime] = None
+    last_successful_run_at: Optional[datetime] = None
+    primary_day: str
+    primary_run_time: Optional[str] = None
+    fallback_day: str
+    fallback_run_time: Optional[str] = None
+    has_credentials: bool
+    credentials_updated_at: Optional[datetime] = None
+    next_run_at: Optional[datetime] = None
+    last_run: Optional[AutoScheduleRunResponse] = None

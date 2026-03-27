@@ -5,3 +5,4 @@ beautifulsoup4==4.12.3
 python-dotenv==1.0.1
 pydantic==2.10.4
 python-multipart==0.0.20
+cryptography==45.0.4

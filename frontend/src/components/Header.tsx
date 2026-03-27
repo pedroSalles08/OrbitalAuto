@@ -3,6 +3,7 @@
 "use client";
 
 import { LogOut, Utensils } from "lucide-react";
+import AutoScheduleControl from "./AutoScheduleControl";
 
 interface HeaderProps {
   nome: string;
@@ -31,6 +32,7 @@ export default function Header({ nome, onLogout }: HeaderProps) {
           <span className="text-sm text-green-100 hidden sm:block">
             {nome}
           </span>
+          <AutoScheduleControl />
           <button
             onClick={onLogout}
             className="flex items-center gap-2 bg-white/15 hover:bg-white/25 
